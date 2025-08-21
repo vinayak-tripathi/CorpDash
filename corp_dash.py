@@ -6,22 +6,13 @@ from NSE and BSE exchanges with enhanced filtering and visualization.
 
 import streamlit as st
 import pandas as pd
-import json
 import re
-import urllib.parse
-import os
 import requests
 from datetime import datetime, date, timedelta
 from typing import Tuple, List, Optional
 import logging
 
 # Third-party imports
-from selenium import webdriver
-from selenium.webdriver.chrome.service import Service
-from selenium.webdriver.common.by import By
-from selenium.webdriver.support.ui import WebDriverWait
-from selenium.webdriver.support import expected_conditions as EC
-from webdriver_manager.chrome import ChromeDriverManager
 from zipfile import ZipFile
 from io import BytesIO
 from sqlalchemy import create_engine, text
@@ -85,152 +76,6 @@ logger = logging.getLogger(__name__)
 # ================================================================================
 # DATA FETCHING FUNCTIONS
 # ================================================================================
-
-def get_selenium_driver() -> webdriver.Chrome:
-    """Initialize and return a configured Chrome WebDriver."""
-    try:
-        chromedriver_path = ChromeDriverManager().install()
-        if not chromedriver_path.endswith("chromedriver.exe"):
-            chromedriver_dir = os.path.dirname(chromedriver_path)
-            chromedriver_path = os.path.join(chromedriver_dir, "chromedriver.exe")
-
-        service = Service(chromedriver_path)
-        options = webdriver.ChromeOptions()
-        
-        # Configure Chrome options for better performance
-        options.add_argument("--headless")  # Run in headless mode for better performance
-        options.add_argument("--no-sandbox")
-        options.add_argument("--disable-dev-shm-usage")
-        options.add_argument("--disable-gpu")
-        options.add_argument("--window-size=1920,1080")
-        options.add_argument("user-agent=Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36")
-        options.add_experimental_option("excludeSwitches", ["enable-automation"])
-        options.add_argument('--disable-blink-features=AutomationControlled')
-        options.add_experimental_option('prefs', {
-            "download.prompt_for_download": False,
-            "plugins.always_open_pdf_externally": True,
-        })
-        
-        return webdriver.Chrome(service=service, options=options)
-    except Exception as e:
-        logger.error(f"Failed to initialize WebDriver: {e}")
-        raise
-
-
-def fetch_nse_announcements() -> Tuple[pd.DataFrame, pd.DataFrame]:
-    """Fetch NSE announcements and board meetings data."""
-    driver = None
-    try:
-        driver = get_selenium_driver()
-        
-        # Navigate to NSE corporate filings page
-        driver.get(f"{NSE_BASE_URL}/companies-listing/corporate-filings-announcements")
-        wait = WebDriverWait(driver, 10)
-
-        # Fetch Announcements
-        start_date = (date.today() - timedelta(days=DEFAULT_LOOKBACK_DAYS)).strftime("%d-%m-%Y")
-        end_date = date.today().strftime("%d-%m-%Y")
-        
-        ann_params = {
-            "index": "equities",
-            "symbol": "",
-            "subject": "",
-            "from_date": start_date,
-            "to_date": end_date,
-            "fo_sec": ""
-        }
-        
-        driver.get(f"{NSE_CORP_ANN_URL}?{urllib.parse.urlencode(ann_params)}")
-        ann_data = json.loads(driver.find_element(By.TAG_NAME, "pre").text)
-        
-        df_ann = pd.DataFrame(ann_data)[['symbol', 'desc', 'an_dt', 'attchmntText', 'attchmntFile']]
-        df_ann['an_dt'] = pd.to_datetime(df_ann['an_dt'])
-        df_ann.rename({'desc': 'description'}, axis=1, inplace=True)
-
-        # Fetch Board Meetings
-        driver.get(NSE_BASE_URL)  # Reset session
-        
-        bm_start_date = date.today().strftime("%d-%m-%Y")
-        bm_end_date = (date.today() + timedelta(days=DEFAULT_LOOKAHEAD_DAYS)).strftime("%d-%m-%Y")
-        
-        bm_params = {
-            "index": "equities",
-            "symbol": "",
-            "subject": "",
-            "from_date": bm_start_date,
-            "to_date": bm_end_date,
-            "fo_sec": ""
-        }
-        
-        driver.get(f"{NSE_BOARD_MEET_URL}?{urllib.parse.urlencode(bm_params)}")
-        bm_data = json.loads(driver.find_element(By.TAG_NAME, "pre").text)
-        
-        df_bm = pd.DataFrame(bm_data)[['bm_symbol', 'bm_date', 'bm_purpose', 'bm_desc', 'bm_timestamp', 'attachment']]
-        df_bm['bm_date'] = pd.to_datetime(df_bm['bm_date'])
-        df_bm['bm_timestamp'] = pd.to_datetime(df_bm['bm_timestamp'])
-        
-        logger.info(f"Fetched {len(df_ann)} announcements and {len(df_bm)} board meetings from NSE")
-        return df_ann, df_bm
-        
-    except Exception as e:
-        logger.error(f"Error fetching NSE data: {e}")
-        return pd.DataFrame(), pd.DataFrame()
-    finally:
-        if driver:
-            driver.quit()
-
-
-def fetch_bse_corp_actions() -> pd.DataFrame:
-    """Fetch BSE corporate actions data using requests."""
-    try:
-        session = requests.Session()
-        headers = {
-            "Accept": "application/json, text/plain, */*",
-            "Accept-Language": "en-US,en;q=0.7",
-            "Origin": "https://www.bseindia.com",
-            "Referer": "https://www.bseindia.com/",
-            "Sec-Ch-Ua": '"Brave";v="131", "Chromium";v="131", "Not_A Brand";v="24"',
-            "Sec-Ch-Ua-Mobile": "?0",
-            "Sec-Ch-Ua-Platform": '"Windows"',
-            "Sec-Fetch-Dest": "empty",
-            "Sec-Fetch-Mode": "cors",
-            "Sec-Fetch-Site": "same-site",
-            "Sec-Gpc": "1",
-            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36",
-        }
-        
-        # Initialize session
-        session.get("https://bseindia.com", headers=headers, timeout=10)
-        
-        # Fetch corporate actions data
-        params = {
-            "Fdate": None,
-            "Purposecode": None,
-            "TDate": None,
-            "ddlcategorys": 'E',
-            "ddlindustrys": None,
-            "scripcode": None,
-            "segment": '0',
-            "strSearch": 'S',
-        }
-        
-        response = session.get(BSE_API_URL, params=params, headers=headers, timeout=15)
-        response.raise_for_status()
-        
-        data = json.loads(response.content)
-        df_bse = pd.DataFrame(data)
-        
-        if not df_bse.empty:
-            df_bse['Ex_date'] = pd.to_datetime(df_bse['Ex_date'], errors='coerce')
-            df_bse['RD_Date'] = pd.to_datetime(df_bse['RD_Date'], errors='coerce')
-            df_bse = df_bse[['short_name', 'Ex_date', 'RD_Date', 'Purpose', 'scrip_code']]
-        
-        logger.info(f"Fetched {len(df_bse)} corporate actions from BSE")
-        return df_bse
-        
-    except Exception as e:
-        logger.error(f"Error fetching BSE data: {e}")
-        return pd.DataFrame()
 
 
 @st.cache_data(ttl=3600)  # Cache for 1 hour
@@ -373,29 +218,29 @@ def load_data(refresh: bool = False) -> Tuple[pd.DataFrame, pd.DataFrame, pd.Dat
         act = pd.read_sql("SELECT * FROM corp_actions", engine, 
                          parse_dates=['Ex_date', 'RD_Date', 'added'])
         
-        if refresh:
-            # Fetch fresh data
-            ann_new, bm_new = fetch_nse_announcements()
-            act_new = fetch_bse_corp_actions()
+        # if refresh:
+        #     # Fetch fresh data
+        #     ann_new, bm_new = fetch_nse_announcements()
+        #     act_new = fetch_bse_corp_actions()
             
-            # Add timestamp
-            timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-            for df in [ann_new, bm_new, act_new]:
-                if not df.empty:
-                    df['added'] = timestamp
+        #     # Add timestamp
+        #     timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        #     for df in [ann_new, bm_new, act_new]:
+        #         if not df.empty:
+        #             df['added'] = timestamp
             
-            # Insert new data
-            insert_ignore_sqlalchemy(bm_new, "board_meetings", engine, ["bm_symbol", "bm_date", "bm_purpose"])
-            insert_ignore_sqlalchemy(ann_new, "announcements", engine, ["symbol", "an_dt"])
-            insert_ignore_sqlalchemy(act_new, "corp_actions", engine, ["scrip_code", "Ex_date", "Purpose"])
+        #     # Insert new data
+        #     insert_ignore_sqlalchemy(bm_new, "board_meetings", engine, ["bm_symbol", "bm_date", "bm_purpose"])
+        #     insert_ignore_sqlalchemy(ann_new, "announcements", engine, ["symbol", "an_dt"])
+        #     insert_ignore_sqlalchemy(act_new, "corp_actions", engine, ["scrip_code", "Ex_date", "Purpose"])
             
-            # Reload data after refresh
-            bm = pd.read_sql("SELECT * FROM board_meetings", engine, 
-                            parse_dates=['bm_date', 'bm_timestamp', 'added'])
-            ann = pd.read_sql("SELECT * FROM announcements", engine, 
-                             parse_dates=['an_dt', 'added'])
-            act = pd.read_sql("SELECT * FROM corp_actions", engine, 
-                             parse_dates=['Ex_date', 'RD_Date', 'added'])
+        #     # Reload data after refresh
+        #     bm = pd.read_sql("SELECT * FROM board_meetings", engine, 
+        #                     parse_dates=['bm_date', 'bm_timestamp', 'added'])
+        #     ann = pd.read_sql("SELECT * FROM announcements", engine, 
+        #                      parse_dates=['an_dt', 'added'])
+        #     act = pd.read_sql("SELECT * FROM corp_actions", engine, 
+        #                      parse_dates=['Ex_date', 'RD_Date', 'added'])
         
         logger.info(f"Loaded data: {len(ann)} announcements, {len(bm)} board meetings, {len(act)} corporate actions")
         return bm, ann, act
