@@ -1,0 +1,8 @@
+streamlit
+pandas
+selenium
+webdriver-manager
+requests
+SQLAlchemy
+mysql
+mysql-connector-python
