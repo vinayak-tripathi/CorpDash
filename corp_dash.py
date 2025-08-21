@@ -44,12 +44,9 @@ INDEX_URLS = {
 
 
 # Construct the database URI
-DATABASE_URI = f"mysql+mysqlconnector://{DB_USER}:{DB_PASSWORD}@{DB_HOST}:{DB_PORT}/{DB_NAME}"
+DATABASE_URI = f"mysql://{DB_USER}:{DB_PASSWORD}@{DB_HOST}:{DB_PORT}/{DB_NAME}"
 # Create database engine
-engine: Engine = create_engine(
-    DATABASE_URI
-    # connect_args={'host': DATABASE_CONFIG['host'], 'port': DATABASE_CONFIG['port']}
-)
+conn = st.connection('mysql', type='sql')
 
 # File paths (keeping for potential future use)
 CORP_ANN_FILE = st.secrets["paths"]["corp_ann_file"]
@@ -211,11 +208,11 @@ def load_data(refresh: bool = False) -> Tuple[pd.DataFrame, pd.DataFrame, pd.Dat
     """Load data from database and optionally refresh from external sources."""
     try:
         # Load existing data from database
-        bm = pd.read_sql("SELECT * FROM board_meetings", engine, 
+        bm = pd.read_sql("SELECT * FROM board_meetings", conn.engine, 
                         parse_dates=['bm_date', 'bm_timestamp', 'added'])
-        ann = pd.read_sql("SELECT * FROM announcements", engine, 
+        ann = pd.read_sql("SELECT * FROM announcements", conn.engine, 
                          parse_dates=['an_dt', 'added'])
-        act = pd.read_sql("SELECT * FROM corp_actions", engine, 
+        act = pd.read_sql("SELECT * FROM corp_actions", conn.engine, 
                          parse_dates=['Ex_date', 'RD_Date', 'added'])
         
         # if refresh:
