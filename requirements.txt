@@ -2,3 +2,5 @@ pandas
 requests
 SQLAlchemy
 mysql
+mysql-connector-python
+
